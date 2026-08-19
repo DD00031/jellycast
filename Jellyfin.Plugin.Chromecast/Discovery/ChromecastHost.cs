@@ -54,17 +54,29 @@ public sealed class ChromecastHost : IHostedService, IDisposable
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Starting Chromecast discovery");
+        // An exception thrown out of IHostedService.StartAsync aborts startup of the entire
+        // generic host - i.e. it would take down the whole Jellyfin server, not just this
+        // plugin. Discovery setup touches the network (mDNS socket binding), so failures here
+        // must be contained: casting simply won't be available rather than the server refusing
+        // to start.
+        try
+        {
+            _logger.LogInformation("Starting Chromecast discovery");
 
-        _manager = new ChromecastDiscoveryManager(
-            _loggerFactory,
-            _sessionManager,
-            _libraryManager,
-            _userManager,
-            _mediaSourceManager,
-            _appHost);
+            _manager = new ChromecastDiscoveryManager(
+                _loggerFactory,
+                _sessionManager,
+                _libraryManager,
+                _userManager,
+                _mediaSourceManager,
+                _appHost);
 
-        _manager.Start();
+            _manager.Start();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start Chromecast discovery - Chromecast casting will be unavailable");
+        }
 
         return Task.CompletedTask;
     }
