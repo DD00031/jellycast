@@ -19,9 +19,6 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          # The plugin itself targets net8.0 (matching the Jellyfin server ABI), but the
-          # SharpCaster dependency multi-targets net9.0, which requires SDK 9+ to build even
-          # when only its netstandard2.0 leg ends up referenced.
           dotnet-version: '9.0.x'
 
       - name: Restore

@@ -22,8 +22,6 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          # See build.yml: SDK 9+ is needed to build SharpCaster's multi-targeted project even
-          # though this plugin itself targets net8.0.
           dotnet-version: '9.0.x'
 
       - name: Determine version
@@ -38,7 +36,7 @@ jobs:
       - name: Package zip
         id: package
         run: |
-          zip_name="jellyfin-plugin-chromecast_${{ steps.version.outputs.version }}.zip"
+          zip_name="jellycast_${{ steps.version.outputs.version }}.zip"
           (cd publish/Jellyfin.Plugin.Chromecast && zip -r "../../$zip_name" .)
           checksum=$(md5sum "$zip_name" | cut -d ' ' -f1)
           echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
