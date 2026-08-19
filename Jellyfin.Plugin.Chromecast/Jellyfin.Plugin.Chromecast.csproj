@@ -1,19 +1,36 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <RootNamespace>Jellyfin.Plugin.Chromecast</RootNamespace>
     <AssemblyName>Jellyfin.Plugin.Chromecast</AssemblyName>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <!--
+      Jellyfin's plugin loader recursively loads every .dll under the plugin folder, including
+      RID-specific "runtimes/**" assets - it has no RID-aware resolution like a normal apphost.
+      A transitive dependency (via SharpCaster -> System.Text.Json) ships a browser/WASM-targeted
+      System.Text.Encodings.Web.dll under runtimes/browser/lib/net8.0, which conflicts with the
+      copy already loaded by the host and disables the whole plugin. Disabling copy of these
+      RID-specific assets keeps only the generic managed assembly, which is all a
+      framework-dependent, in-process plugin needs.
+    -->
+    <CopyLocalRuntimeTargetAssets>false</CopyLocalRuntimeTargetAssets>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="10.9.11">
+    <!--
+      This must match the target server's exact release version. Jellyfin's plugin loader binds
+      interface implementations (IPluginServiceRegistrator, ISessionController, ...) by exact
+      assembly identity - a plugin built against an older Jellyfin.Controller/Jellyfin.Model
+      version fails with a TypeLoadException at load time on a newer server, even though the
+      interface source is unchanged, rather than a graceful "unsupported" message.
+    -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.11">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
-    <PackageReference Include="Jellyfin.Model" Version="10.9.11">
+    <PackageReference Include="Jellyfin.Model" Version="10.11.11">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
   </ItemGroup>
@@ -27,5 +44,27 @@
     <None Remove="Configuration\configPage.html" />
     <EmbeddedResource Include="Configuration\configPage.html" />
   </ItemGroup>
+
+  <!--
+    Jellyfin's plugin loader gives each plugin its own isolated AssemblyLoadContext and, before
+    activating it, calls assembly.GetTypes() to eagerly resolve every member signature - including
+    ISessionController/IPluginServiceRegistrator method parameters typed as IServiceCollection and
+    ILogger<T>. SharpCaster pulls in Microsoft.Extensions.DependencyInjection(.Abstractions) and
+    Microsoft.Extensions.Logging.Abstractions transitively, and if copies of those ship alongside
+    the plugin, the isolated load context resolves our copy instead of the host's - a different
+    assembly identity for the "same" type - which fails GetTypes() with a TypeLoadException
+    ("Method 'RegisterServices' ... does not have an implementation") and gets the whole plugin
+    disabled. Jellyfin's own host is built on these same Microsoft.Extensions.* packages and
+    always provides them, so strip our copies after publish and let the plugin load context fall
+    through to the host's.
+  -->
+  <Target Name="RemoveHostProvidedAssemblies" AfterTargets="Publish">
+    <ItemGroup>
+      <_HostProvidedAssembly Include="$(PublishDir)Microsoft.Extensions.DependencyInjection.dll" />
+      <_HostProvidedAssembly Include="$(PublishDir)Microsoft.Extensions.DependencyInjection.Abstractions.dll" />
+      <_HostProvidedAssembly Include="$(PublishDir)Microsoft.Extensions.Logging.Abstractions.dll" />
+    </ItemGroup>
+    <Delete Files="@(_HostProvidedAssembly)" Condition="Exists('%(_HostProvidedAssembly.Identity)')" />
+  </Target>
 
 </Project>

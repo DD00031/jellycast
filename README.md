@@ -50,18 +50,23 @@ cd jellycast
 dotnet publish Jellyfin.Plugin.Chromecast/Jellyfin.Plugin.Chromecast.csproj -c Release -o publish
 ```
 
-> Building requires **.NET SDK 9.0+** even though the plugin itself targets net8.0 (to match
-> the Jellyfin server ABI) — the vendored SharpCaster dependency multi-targets net9.0, and older
-> SDKs can't evaluate that project at all. Verified working with `mcr.microsoft.com/dotnet/sdk:9.0`.
+> Building requires **.NET SDK 9.0+** — Jellyfin server 10.10+ (including the current
+> `jellyfin/jellyfin:latest` Docker image) runs on .NET 9, so this plugin targets net9.0 to match.
+> Verified working end-to-end with `mcr.microsoft.com/dotnet/sdk:9.0` against a real
+> `jellyfin/jellyfin:latest` (10.11.11) container.
 
 Copy everything under `publish/` into a new folder named `Chromecast` inside your Jellyfin
 `plugins` directory (e.g. `/var/lib/jellyfin/plugins/Chromecast` on Linux, or
 `%ProgramData%\Jellyfin\Server\plugins\Chromecast` on Windows), then restart Jellyfin.
 
-> The plugin targets Jellyfin server **10.9.x** (`Jellyfin.Controller`/`Jellyfin.Model` 10.9.11,
-> `targetAbi` 10.9.0.0). If you run a different server version, update those version numbers in
-> `Jellyfin.Plugin.Chromecast.csproj` and `build.yaml` to match, or the plugin will load as
-> "Not Supported".
+> The plugin currently targets Jellyfin server **10.11.x** (`Jellyfin.Controller`/
+> `Jellyfin.Model` 10.11.11, `targetAbi` 10.11.0.0). This has to match your server's exact
+> version reasonably closely: Jellyfin's plugin loader binds interfaces like
+> `IPluginServiceRegistrator` by exact assembly identity, so a version mismatch doesn't
+> gracefully fall back to "Not Supported" — it throws a `TypeLoadException` on that interface
+> and disables the plugin (visible in the server log as "does not have an implementation"). If
+> you're on a different server version, update the package/targetAbi versions in
+> `Jellyfin.Plugin.Chromecast.csproj` and `build.yaml` to match and rebuild.
 
 ## Configuration
 
