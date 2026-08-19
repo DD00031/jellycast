@@ -30,6 +30,14 @@ same pattern for Chromecast instead of DLNA:
 No changes to jellyfin-web are needed — everything happens server-side through interfaces the
 web UI already knows how to talk to.
 
+> [!IMPORTANT]
+> **This build must match your Jellyfin server's exact version (down to the patch number)**,
+> not just the major.minor line. Confirmed by testing against two real servers on the same
+> 10.11 line (10.11.6 and 10.11.11): a mismatch doesn't degrade gracefully, it fails to load
+> with `Could not load file or assembly 'MediaBrowser.Controller, Version=X.X.X.0'... The system
+> cannot find the file specified.` in the server log. See [Installing](#installing) for how to
+> rebuild against your own version.
+
 ## Installing
 
 ### Option A — add this repository (recommended)
@@ -59,14 +67,23 @@ Copy everything under `publish/` into a new folder named `Chromecast` inside you
 `plugins` directory (e.g. `/var/lib/jellyfin/plugins/Chromecast` on Linux, or
 `%ProgramData%\Jellyfin\Server\plugins\Chromecast` on Windows), then restart Jellyfin.
 
-> The plugin currently targets Jellyfin server **10.11.x** (`Jellyfin.Controller`/
-> `Jellyfin.Model` 10.11.11, `targetAbi` 10.11.0.0). This has to match your server's exact
-> version reasonably closely: Jellyfin's plugin loader binds interfaces like
-> `IPluginServiceRegistrator` by exact assembly identity, so a version mismatch doesn't
-> gracefully fall back to "Not Supported" — it throws a `TypeLoadException` on that interface
-> and disables the plugin (visible in the server log as "does not have an implementation"). If
-> you're on a different server version, update the package/targetAbi versions in
-> `Jellyfin.Plugin.Chromecast.csproj` and `build.yaml` to match and rebuild.
+> The plugin as committed targets Jellyfin server **10.11.11** exactly
+> (`Jellyfin.Controller`/`Jellyfin.Model` 10.11.11, `targetAbi` 10.11.0.0) — pick this as a
+> reasonable default for new installs on the current latest release, but treat it as a starting
+> point, not a given.
+>
+> Confirmed by testing against two real 10.11.x servers that this needs to match your server's
+> **exact patch version**, not just the major.minor line: Jellyfin's own `MediaBrowser.Controller`
+> etc. assemblies are stamped with the full release version (e.g. `10.11.6.0`, not `10.11.0.0`),
+> and the plugin's compiled references request that exact version by strong name with no
+> fallback/redirect. A mismatch fails outright — the server log shows
+> `Could not load file or assembly 'MediaBrowser.Controller, Version=10.11.11.0, ...'. The
+> system cannot find the file specified.` (if the two versions are close enough that the classes
+> haven't changed shape) or a `TypeLoadException` naming a method with "does not have an
+> implementation" (if an interface itself changed between versions). Either way, the fix is the
+> same: check your server's exact version under **Dashboard → About**, set that same version for
+> both `PackageReference`s in `Jellyfin.Plugin.Chromecast.csproj` (and `targetAbi` in
+> `build.yaml`, using the `major.minor.0.0` form Jellyfin's own manifests use there), and rebuild.
 
 ## Configuration
 
