@@ -1,0 +1,41 @@
+name: .NET
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 9.0.x
+    - name: Restore dependencies
+      run: dotnet restore SharpCaster.sln
+    - name: tag
+      id: tag
+      run: |
+          version="$(gh release view -q .tagName --json tagName)"
+          echo 'VERSION='$version >> $GITHUB_ENV
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build
+      run: dotnet build --no-restore --configuration Release /p:Version=${{ env.VERSION }} Sharpcaster/Sharpcaster.csproj
+    - name: Package
+      if: github.event_name == 'release' && github.event.action == 'published'
+      run: dotnet pack --configuration Release /p:Version=${{ env.VERSION }} /p:packageVersion=${{ env.VERSION }} Sharpcaster/Sharpcaster.csproj
+    - name: Push
+      if: github.event_name == 'release' && github.event.action == 'published'
+      run:  dotnet nuget push "**/*.nupkg" -k $NUGET_AUTH_TOKEN -s nuget.org
+      env:
+        NUGET_AUTH_TOKEN: ${{ secrets.NUGET }}
