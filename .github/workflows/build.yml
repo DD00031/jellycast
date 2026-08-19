@@ -1,0 +1,31 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          # The plugin itself targets net8.0 (matching the Jellyfin server ABI), but the
+          # SharpCaster dependency multi-targets net9.0, which requires SDK 9+ to build even
+          # when only its netstandard2.0 leg ends up referenced.
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore Jellyfin.Plugin.Chromecast/Jellyfin.Plugin.Chromecast.csproj
+
+      - name: Build
+        run: dotnet build Jellyfin.Plugin.Chromecast/Jellyfin.Plugin.Chromecast.csproj -c Release --no-restore

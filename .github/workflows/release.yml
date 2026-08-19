@@ -1,0 +1,76 @@
+name: Release
+
+# Push a tag like "v1.0.0.0" (version must be a valid 2-4 part System.Version, matching what
+# Jellyfin expects in the repository manifest) to build, package, publish a GitHub release with
+# the plugin zip attached, and record the new version in manifest.json so that anyone who has
+# added this repository's manifest.json URL under
+# Dashboard > Plugins > Repositories in Jellyfin picks up the update automatically.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          # See build.yml: SDK 9+ is needed to build SharpCaster's multi-targeted project even
+          # though this plugin itself targets net8.0.
+          dotnet-version: '9.0.x'
+
+      - name: Determine version
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish plugin
+        run: dotnet publish Jellyfin.Plugin.Chromecast/Jellyfin.Plugin.Chromecast.csproj -c Release -o publish/Jellyfin.Plugin.Chromecast
+
+      - name: Package zip
+        id: package
+        run: |
+          zip_name="jellyfin-plugin-chromecast_${{ steps.version.outputs.version }}.zip"
+          (cd publish/Jellyfin.Plugin.Chromecast && zip -r "../../$zip_name" .)
+          checksum=$(md5sum "$zip_name" | cut -d ' ' -f1)
+          echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" "${{ steps.package.outputs.zip_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
+
+      - name: Update repository manifest.json
+        run: |
+          target_abi=$(grep '^targetAbi:' Jellyfin.Plugin.Chromecast/build.yaml | sed -E 's/targetAbi: *"(.*)"/\1/')
+          source_url="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.package.outputs.zip_name }}"
+          timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          jq \
+            --arg version "${{ steps.version.outputs.version }}" \
+            --arg targetAbi "$target_abi" \
+            --arg sourceUrl "$source_url" \
+            --arg checksum "${{ steps.package.outputs.checksum }}" \
+            --arg timestamp "$timestamp" \
+            '(.[0].versions) |= ([{version: $version, changelog: ("See " + $sourceUrl + " release notes."), targetAbi: $targetAbi, sourceUrl: $sourceUrl, checksum: $checksum, timestamp: $timestamp}] + .)' \
+            manifest.json > manifest.json.tmp
+          mv manifest.json.tmp manifest.json
+
+      - name: Commit updated manifest.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "Update manifest.json for ${{ github.ref_name }}"
+          git push origin HEAD:main

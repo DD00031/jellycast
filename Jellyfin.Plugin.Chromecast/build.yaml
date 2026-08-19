@@ -1,0 +1,17 @@
+---
+name: "Chromecast"
+guid: "ec2dcff4-56f0-4a88-b0a8-f3910a7cd823"
+version: "1.0.0.0"
+targetAbi: "10.9.0.0"
+framework: "net8.0"
+owner: "DD00031"
+overview: "Cast to Google Cast devices from Jellyfin's built-in cast interface"
+description: >
+  Discovers Google Cast (Chromecast) devices on the local network and exposes each one as a
+  session in Jellyfin's existing cast/remote-control interface. Once installed, Chromecast
+  devices show up automatically in the cast button already present in jellyfin-web, and
+  playback is controlled the same way as casting to any other Jellyfin client session.
+category: "General"
+changelog: >
+  - Initial release: Chromecast discovery, casting and remote control through Jellyfin's
+    native session interface.
