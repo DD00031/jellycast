@@ -1,12 +1,12 @@
 [
   {
     "guid": "ec2dcff4-56f0-4a88-b0a8-f3910a7cd823",
-    "name": "Chromecast",
+    "name": "Jellycast",
     "description": "Discovers Google Cast (Chromecast) devices on the local network and exposes each one as a session in Jellyfin's existing cast/remote-control interface. Once installed, Chromecast devices show up automatically in the cast button already present in jellyfin-web, and playback is controlled the same way as casting to any other Jellyfin client session.",
     "overview": "Cast to Google Cast devices from Jellyfin's built-in cast interface",
     "owner": "DD00031",
     "category": "General",
-    "imageUrl": "",
+    "imageUrl": "https://raw.githubusercontent.com/DD00031/jellycast/main/.github/assets/jellycast-icon.png",
     "versions": []
   }
 ]

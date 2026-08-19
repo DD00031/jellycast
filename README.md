@@ -1,4 +1,4 @@
-# Jellyfin Chromecast Plugin
+# Jellycast
 
 A Jellyfin server plugin that adds native Google Cast (Chromecast) support to Jellyfin's
 **existing** cast interface — no separate app, button or UI to learn.
@@ -36,7 +36,7 @@ web UI already knows how to talk to.
 > 10.11 line (10.11.6 and 10.11.11): a mismatch doesn't degrade gracefully, it fails to load
 > with `Could not load file or assembly 'MediaBrowser.Controller, Version=X.X.X.0'... The system
 > cannot find the file specified.` in the server log. See [Installing](#installing) for how to
-> rebuild against your own version.
+> rebuild against your own version with a single build flag.
 
 ## Installing
 
@@ -45,10 +45,11 @@ web UI already knows how to talk to.
 1. In Jellyfin, go to **Dashboard → Plugins → Repositories → Add Repository**.
 2. Repository URL:
    `https://raw.githubusercontent.com/DD00031/jellycast/main/manifest.json`
-3. Go to **Catalog**, find **Chromecast**, install it, and restart Jellyfin.
+3. Go to **Catalog**, find **Jellycast**, install it, and restart Jellyfin.
 
 This only works once a tagged release has been published (see [Releasing](#releasing) below) —
-until then the catalog entry has no installable version.
+until then the catalog entry has no installable version. It also only works if a release happens
+to have been built for your server's exact version — see the note below.
 
 ### Option B — build and install manually
 
@@ -60,34 +61,34 @@ dotnet publish Jellyfin.Plugin.Chromecast/Jellyfin.Plugin.Chromecast.csproj -c R
 
 > Building requires **.NET SDK 9.0+** — Jellyfin server 10.10+ (including the current
 > `jellyfin/jellyfin:latest` Docker image) runs on .NET 9, so this plugin targets net9.0 to match.
-> Verified working end-to-end with `mcr.microsoft.com/dotnet/sdk:9.0` against a real
-> `jellyfin/jellyfin:latest` (10.11.11) container.
+> Verified working end-to-end with `mcr.microsoft.com/dotnet/sdk:9.0` against real Jellyfin
+> servers (both Docker and a native install).
 
-Copy everything under `publish/` into a new folder named `Chromecast` inside your Jellyfin
-`plugins` directory (e.g. `/var/lib/jellyfin/plugins/Chromecast` on Linux, or
-`%ProgramData%\Jellyfin\Server\plugins\Chromecast` on Windows), then restart Jellyfin.
+Copy everything under `publish/` into a new folder named `Jellycast` inside your Jellyfin
+`plugins` directory (e.g. `/var/lib/jellyfin/plugins/Jellycast` on Linux, or
+`%ProgramData%\Jellyfin\Server\plugins\Jellycast` on Windows), then restart Jellyfin.
 
-> The plugin as committed targets Jellyfin server **10.11.11** exactly
-> (`Jellyfin.Controller`/`Jellyfin.Model` 10.11.11, `targetAbi` 10.11.0.0) — pick this as a
-> reasonable default for new installs on the current latest release, but treat it as a starting
-> point, not a given.
->
-> Confirmed by testing against two real 10.11.x servers that this needs to match your server's
-> **exact patch version**, not just the major.minor line: Jellyfin's own `MediaBrowser.Controller`
-> etc. assemblies are stamped with the full release version (e.g. `10.11.6.0`, not `10.11.0.0`),
-> and the plugin's compiled references request that exact version by strong name with no
-> fallback/redirect. A mismatch fails outright — the server log shows
-> `Could not load file or assembly 'MediaBrowser.Controller, Version=10.11.11.0, ...'. The
-> system cannot find the file specified.` (if the two versions are close enough that the classes
-> haven't changed shape) or a `TypeLoadException` naming a method with "does not have an
-> implementation" (if an interface itself changed between versions). Either way, the fix is the
-> same: check your server's exact version under **Dashboard → About**, set that same version for
-> both `PackageReference`s in `Jellyfin.Plugin.Chromecast.csproj` (and `targetAbi` in
-> `build.yaml`, using the `major.minor.0.0` form Jellyfin's own manifests use there), and rebuild.
+> **Building for your own server version.** This repository targets Jellyfin **10.11.11** by
+> default, but that has to match your server's exact patch version, not just the major.minor
+> line — confirmed by testing against two real 10.11.x servers side by side. Jellyfin's own
+> `MediaBrowser.Controller`/`Model` assemblies get a new, incompatible identity on every patch
+> release, and the plugin's compiled references bake in the exact version they were built
+> against with no fallback. A mismatch fails outright, visible in the server log as either
+> `Could not load file or assembly 'MediaBrowser.Controller, Version=X.X.X.0, ...'. The system
+> cannot find the file specified.` or a `TypeLoadException` naming a method as "does not have an
+> implementation". There's no way to make a single compiled build tolerant of this - the version
+> is baked into the DLL's own metadata at compile time. Check your server's exact version under
+> **Dashboard → About**, then rebuild against it directly, no file editing needed:
+> ```bash
+> dotnet build -p:JellyfinServerVersion=10.11.6 Jellyfin.Plugin.Chromecast/Jellyfin.Plugin.Chromecast.csproj
+> ```
+> (swap in your own version, and use `dotnet publish` the same way for the actual install
+> artifact). `build.yaml`'s `targetAbi` is left as documentation and isn't read by this repo's
+> own release process, so there's no need to touch it for a one-off local build.
 
 ## Configuration
 
-**Dashboard → Plugins → Chromecast** lets you tune:
+**Dashboard → Plugins → Jellycast** lets you tune:
 
 - **Discovery interval** — how often the local network is scanned for devices.
 - **Device timeout** — how long a device may go unseen before it's dropped from the cast menu.
@@ -103,8 +104,15 @@ Copy everything under `publish/` into a new folder named `Chromecast` inside you
   with Google and publishing a hosted receiver app, which is outside the scope of what a
   self-hosted plugin can do.
 - **Codec support** follows what the Default Media Receiver plays natively: H.264 video with
-  AAC/MP3 audio direct-plays; anything else (HEVC, AV1, VP9, DTS, TrueHD, etc.) is transcoded to
-  H.264/AAC MP4 by Jellyfin's normal transcoding pipeline.
+  AAC/MP3 audio direct-plays (verified end-to-end, including seeking via normal HTTP range
+  requests); anything else (HEVC, AV1, VP9, DTS, TrueHD, etc.) is transcoded to H.264/AAC via
+  Jellyfin's HLS endpoint, which gives an accurate duration up front and supports real seeking
+  by requesting different segments (also verified end-to-end).
+- **On-device seek display for transcoded content**: seeking on a source that needs transcoding
+  restarts the transcode at the new offset (a live single-pass encode has no other way to seek).
+  Jellyfin's own UI shows the correct absolute position immediately, but the Chromecast's own
+  on-screen overlay briefly shows the position of the new segment rather than the original
+  absolute time. Direct-played sources don't have this limitation.
 - **Subtitles** are supported for text-based formats (SRT/ASS/SSA/VTT) via a WebVTT sidecar
   track. Image-based subtitles (PGS/VobSub) aren't supported, since the Default Media Receiver
   can't render them without a burned-in transcode.
@@ -114,15 +122,18 @@ Copy everything under `publish/` into a new folder named `Chromecast` inside you
   `PlayLast` while already casting) is not implemented.
 - **Network**: the Chromecast must be able to reach your Jellyfin server directly over your LAN
   (same requirement as casting from Chrome/the official apps). Remote/relay access is not
-  supported.
+  supported. A full-tunnel VPN on the server (e.g. one that captures the mDNS multicast route)
+  will also prevent discovery from finding devices - this isn't fixable from the plugin side.
 
 ## Releasing
 
-Pushing a tag like `v1.0.0.0` (a valid 2-4 part version number) runs
+Pushing a tag like `v0.1.0.0` (a valid 2-4 part version number) runs
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds the plugin,
 publishes a GitHub release with the packaged zip attached, and commits an updated
 `manifest.json` pointing at it — so anyone with this repository added in Jellyfin picks up the
-new version automatically.
+new version, *provided their server matches the exact Jellyfin version this release was built
+against* (currently 10.11.11 - see the note under Installing). This repo only publishes one
+build per release right now; it doesn't do a build matrix across multiple Jellyfin versions.
 
 ## Project layout
 

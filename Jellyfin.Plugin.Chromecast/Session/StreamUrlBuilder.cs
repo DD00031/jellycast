@@ -16,6 +16,7 @@ namespace Jellyfin.Plugin.Chromecast.Session;
 public static class StreamUrlBuilder
 {
     private static readonly string[] DirectPlayVideoContainers = { "mp4", "m4v", "mov" };
+    private static readonly string[] DirectPlayAudioContainers = { "mp3", "aac", "m4a", "mp4" };
     private static readonly string[] DirectPlayVideoCodecs = { "h264" };
     private static readonly string[] DirectPlayAudioCodecs = { "aac", "mp3" };
 
@@ -39,7 +40,8 @@ public static class StreamUrlBuilder
         string deviceId,
         string playSessionId,
         int? subtitleStreamIndex,
-        bool preferDirectPlay)
+        bool preferDirectPlay,
+        long startPositionTicks = 0)
     {
         serverAddress = serverAddress.TrimEnd('/');
         var itemId = item.Id.ToString("N", CultureInfo.InvariantCulture);
@@ -53,9 +55,8 @@ public static class StreamUrlBuilder
 
         if (!isAudioOnly)
         {
-            if (preferDirectPlay && CanDirectPlayVideo(mediaSource))
+            if (preferDirectPlay && TryGetDirectPlayVideoContainer(mediaSource, out var container))
             {
-                var container = string.IsNullOrEmpty(mediaSource.Container) ? "mp4" : mediaSource.Container;
                 url = string.Format(
                     CultureInfo.InvariantCulture,
                     "{0}/Videos/{1}/stream.{2}?static=true&mediaSourceId={3}&deviceId={4}",
@@ -69,23 +70,34 @@ public static class StreamUrlBuilder
             }
             else
             {
+                // A raw progressive stream.mp4 transcode is a live, single-pass ffmpeg encode with
+                // no upfront duration (the receiver has to guess from however much of the growing
+                // file it has buffered, which is why it can show a wildly short "duration" early
+                // on) and no real seek support. HLS instead gives the receiver a manifest that
+                // declares the actual segment-based duration before playback starts, and supports
+                // genuine seeking by requesting different segments - this is also what Jellyfin's
+                // own web and mobile clients use for transcoded playback.
                 url = string.Format(
                     CultureInfo.InvariantCulture,
-                    "{0}/Videos/{1}/stream.mp4?videoCodec=h264&audioCodec=aac&maxAudioChannels=2&mediaSourceId={2}&deviceId={3}&playSessionId={4}",
+                    "{0}/Videos/{1}/master.m3u8?videoCodec=h264&audioCodec=aac&maxAudioChannels=2&mediaSourceId={2}&deviceId={3}&playSessionId={4}",
                     serverAddress,
                     itemId,
                     mediaSourceId,
                     escapedDeviceId,
                     Uri.EscapeDataString(playSessionId));
-                contentType = "video/mp4";
+                if (startPositionTicks > 0)
+                {
+                    url += "&startTimeTicks=" + startPositionTicks.ToString(CultureInfo.InvariantCulture);
+                }
+
+                contentType = "application/x-mpegURL";
                 playMethod = PlayMethod.Transcode;
             }
         }
         else
         {
-            if (preferDirectPlay && CanDirectPlayAudio(mediaSource))
+            if (preferDirectPlay && TryGetDirectPlayAudioContainer(mediaSource, out var container))
             {
-                var container = string.IsNullOrEmpty(mediaSource.Container) ? "mp3" : mediaSource.Container;
                 url = string.Format(
                     CultureInfo.InvariantCulture,
                     "{0}/Audio/{1}/stream.{2}?static=true&mediaSourceId={3}&deviceId={4}",
@@ -107,6 +119,11 @@ public static class StreamUrlBuilder
                     mediaSourceId,
                     escapedDeviceId,
                     Uri.EscapeDataString(playSessionId));
+                if (startPositionTicks > 0)
+                {
+                    url += "&startTimeTicks=" + startPositionTicks.ToString(CultureInfo.InvariantCulture);
+                }
+
                 contentType = "audio/mpeg";
                 playMethod = PlayMethod.Transcode;
             }
@@ -118,14 +135,17 @@ public static class StreamUrlBuilder
         return new BuiltStream(url, contentType, playMethod, imageUrl, subtitleTrack);
     }
 
-    private static bool CanDirectPlayVideo(MediaSourceInfo mediaSource)
+    private static bool TryGetDirectPlayVideoContainer(MediaSourceInfo mediaSource, out string container)
     {
+        container = string.Empty;
+
         if (!mediaSource.SupportsDirectPlay && !mediaSource.SupportsDirectStream)
         {
             return false;
         }
 
-        if (string.IsNullOrEmpty(mediaSource.Container) || !DirectPlayVideoContainers.Contains(mediaSource.Container, StringComparer.OrdinalIgnoreCase))
+        var matchedContainer = GetMatchingContainerToken(mediaSource.Container, DirectPlayVideoContainers);
+        if (matchedContainer is null)
         {
             return false;
         }
@@ -142,18 +162,60 @@ public static class StreamUrlBuilder
             return false;
         }
 
+        container = matchedContainer;
         return true;
     }
 
-    private static bool CanDirectPlayAudio(MediaSourceInfo mediaSource)
+    private static bool TryGetDirectPlayAudioContainer(MediaSourceInfo mediaSource, out string container)
     {
+        container = string.Empty;
+
         if (!mediaSource.SupportsDirectPlay && !mediaSource.SupportsDirectStream)
         {
             return false;
         }
 
         var audio = mediaSource.GetDefaultAudioStream(mediaSource.DefaultAudioStreamIndex);
-        return audio is not null && !string.IsNullOrEmpty(audio.Codec) && DirectPlayAudioCodecs.Contains(audio.Codec, StringComparer.OrdinalIgnoreCase);
+        if (audio is null || string.IsNullOrEmpty(audio.Codec) || !DirectPlayAudioCodecs.Contains(audio.Codec, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var matchedContainer = GetMatchingContainerToken(mediaSource.Container, DirectPlayAudioContainers);
+        if (matchedContainer is null)
+        {
+            return false;
+        }
+
+        container = matchedContainer;
+        return true;
+    }
+
+    /// <summary>
+    /// Jellyfin often reports <see cref="MediaSourceInfo.Container"/> as ffprobe's raw
+    /// comma-separated format name (e.g. "mov,mp4,m4a,3gp,3g2,mj2" for a great many real MP4
+    /// files), not a single clean extension. Matching it against an accepted-extensions list
+    /// requires checking each comma-separated token rather than the whole string, and the
+    /// matched token is also what has to be used for the stream URL's file extension - the raw
+    /// multi-value string is not a valid path segment.
+    /// </summary>
+    private static string? GetMatchingContainerToken(string? rawContainer, string[] acceptedContainers)
+    {
+        if (string.IsNullOrEmpty(rawContainer))
+        {
+            return null;
+        }
+
+        foreach (var token in rawContainer.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var match = acceptedContainers.FirstOrDefault(c => string.Equals(c, token, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
     }
 
     private static string? BuildImageUrl(BaseItem item, string serverAddress)

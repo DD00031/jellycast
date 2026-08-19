@@ -33,7 +33,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public static Plugin? Instance { get; private set; }
 
     /// <inheritdoc />
-    public override string Name => "Chromecast";
+    public override string Name => "Jellycast";
 
     /// <inheritdoc />
     public override string Description => "Cast to Google Cast devices from Jellyfin's built-in cast interface.";

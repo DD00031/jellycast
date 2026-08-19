@@ -37,6 +37,7 @@ public sealed class ChromecastDiscoveryManager : IDisposable
     private readonly ConcurrentDictionary<string, DateTime> _lastSeen = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _addDeviceLock = new(1, 1);
     private readonly Timer _staleSweepTimer;
+    private readonly CancellationTokenSource _loopCts = new();
     private bool _disposed;
 
     /// <summary>
@@ -59,32 +60,68 @@ public sealed class ChromecastDiscoveryManager : IDisposable
         _appHost = appHost;
 
         _locator = new ChromecastLocator(loggerFactory.CreateLogger<ChromecastLocator>());
-        _locator.ChromecastReceiverFound += OnChromecastReceiverFound;
 
         var staleCheckInterval = TimeSpan.FromSeconds(Math.Max(15, GetConfig().DeviceStaleAfterSeconds / 2));
         _staleSweepTimer = new Timer(SweepStaleDevices, null, staleCheckInterval, staleCheckInterval);
     }
 
     /// <summary>
-    /// Starts continuous mDNS discovery of Chromecast devices.
+    /// Starts polling the local network for Chromecast devices.
     /// </summary>
     public void Start()
     {
         var interval = TimeSpan.FromSeconds(Math.Max(5, GetConfig().DiscoveryIntervalSeconds));
         _logger.LogInformation("Starting Chromecast mDNS discovery (interval: {Interval})", interval);
-        _locator.StartContinuousDiscovery(interval);
+
+        // ChromecastLocator.StartContinuousDiscovery()'s ChromecastReceiverFound event only ever
+        // fires the first time a given device is seen for the lifetime of the locator (it tracks
+        // "seen" devices internally and never re-raises for repeat sightings). We need every scan
+        // to refresh liveness for devices we already know about too - so we drive our own polling
+        // loop with FindReceiversAsync() instead, and process every device found on every cycle.
+        _ = Task.Run(() => RunDiscoveryLoopAsync(interval, _loopCts.Token));
+    }
+
+    private async Task RunDiscoveryLoopAsync(TimeSpan interval, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var receivers = await _locator.FindReceiversAsync().ConfigureAwait(false);
+                foreach (var receiver in receivers)
+                {
+                    await ProcessReceiverAsync(receiver).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error during Chromecast discovery scan, will retry next cycle");
+            }
+
+            try
+            {
+                await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
     }
 
     private static PluginConfiguration GetConfig() => Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
-    private async void OnChromecastReceiverFound(object? sender, ChromecastReceiverEventArgs e)
+    private async Task ProcessReceiverAsync(ChromecastReceiver receiver)
     {
         if (_disposed)
         {
             return;
         }
 
-        var receiver = e.Receiver;
         var deviceId = GetStableDeviceId(receiver);
         _lastSeen[deviceId] = DateTime.UtcNow;
 
@@ -100,7 +137,8 @@ public sealed class ChromecastDiscoveryManager : IDisposable
             var controller = existing?.SessionControllers.OfType<ChromecastSessionController>().FirstOrDefault();
             if (controller is not null)
             {
-                // Already tracked - just refresh the receiver info in case the IP changed.
+                // Already tracked - just refresh the receiver info in case the IP changed, and
+                // clear any stale flag now that it has responded again.
                 controller.UpdateReceiver(receiver);
                 return;
             }
@@ -123,7 +161,7 @@ public sealed class ChromecastDiscoveryManager : IDisposable
         var deviceName = string.IsNullOrEmpty(config.DeviceNamePrefix) ? receiver.Name : config.DeviceNamePrefix + receiver.Name;
 
         var sessionInfo = await _sessionManager
-            .LogSessionActivity("Chromecast", _appHost.ApplicationVersionString, deviceId, deviceName, receiver.DeviceUri.Host, null)
+            .LogSessionActivity("Jellycast", _appHost.ApplicationVersionString, deviceId, deviceName, receiver.DeviceUri.Host, null)
             .ConfigureAwait(false);
 
         var serverAddress = GetServerAddress(receiver);
@@ -227,7 +265,8 @@ public sealed class ChromecastDiscoveryManager : IDisposable
         }
 
         _disposed = true;
-        _locator.ChromecastReceiverFound -= OnChromecastReceiverFound;
+        _loopCts.Cancel();
+        _loopCts.Dispose();
         _locator.Dispose();
         _staleSweepTimer.Dispose();
         _addDeviceLock.Dispose();

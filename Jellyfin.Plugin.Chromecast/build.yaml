@@ -1,8 +1,8 @@
 ---
-name: "Chromecast"
+name: "Jellycast"
 guid: "ec2dcff4-56f0-4a88-b0a8-f3910a7cd823"
-version: "1.0.0.0"
-targetAbi: "10.11.0.0"
+version: "0.1.0.0"
+targetAbi: "10.11.11.0"
 framework: "net9.0"
 owner: "DD00031"
 overview: "Cast to Google Cast devices from Jellyfin's built-in cast interface"
@@ -13,5 +13,10 @@ description: >
   playback is controlled the same way as casting to any other Jellyfin client session.
 category: "General"
 changelog: >
-  - Initial release: Chromecast discovery, casting and remote control through Jellyfin's
-    native session interface.
+  v0.1.0.0 - first tagged release, tested end-to-end against real Chromecast devices:
+  - Chromecast discovery, casting and remote control through Jellyfin's native session interface.
+  - Direct play with correct container detection; HLS transcoding with accurate duration and
+    working seek for incompatible sources.
+  - Volume, mute, play/pause/stop, and progress reporting wired into Jellyfin's normal
+    playback tracking.
+  Requires an exact Jellyfin server version match (see README) - built for 10.11.11.

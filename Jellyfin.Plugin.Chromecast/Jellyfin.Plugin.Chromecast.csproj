@@ -19,18 +19,26 @@
     <CopyLocalRuntimeTargetAssets>false</CopyLocalRuntimeTargetAssets>
   </PropertyGroup>
 
+  <!--
+    Jellyfin's MediaBrowser.Controller/Model assemblies get a new AssemblyVersion on every patch
+    release (confirmed by testing: a plugin built against 10.11.11 fails outright against a
+    10.11.6 server with "Could not load file or assembly ... Version=10.11.11.0 ... The system
+    cannot find the file specified", even though the interface source is identical). There is no
+    way to make one compiled build tolerant of that at runtime - the required version is baked
+    into the plugin DLL's own metadata. JellyfinServerVersion lets you rebuild against a specific
+    server version without hand-editing this file, e.g.:
+      dotnet build -p:JellyfinServerVersion=10.11.6 Jellyfin.Plugin.Chromecast.csproj
+    Defaults to the version this repository currently targets.
+  -->
+  <PropertyGroup>
+    <JellyfinServerVersion Condition="'$(JellyfinServerVersion)' == ''">10.11.11</JellyfinServerVersion>
+  </PropertyGroup>
+
   <ItemGroup>
-    <!--
-      This must match the target server's exact release version. Jellyfin's plugin loader binds
-      interface implementations (IPluginServiceRegistrator, ISessionController, ...) by exact
-      assembly identity - a plugin built against an older Jellyfin.Controller/Jellyfin.Model
-      version fails with a TypeLoadException at load time on a newer server, even though the
-      interface source is unchanged, rather than a graceful "unsupported" message.
-    -->
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.11">
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinServerVersion)">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
-    <PackageReference Include="Jellyfin.Model" Version="10.11.11">
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinServerVersion)">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
   </ItemGroup>

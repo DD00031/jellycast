@@ -2,16 +2,16 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Chromecast</title>
+    <title>Jellycast</title>
 </head>
 <body>
-    <div id="ChromecastConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+    <div id="JellycastConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
         <div data-role="content">
             <div class="content-primary">
-                <form id="ChromecastConfigForm">
+                <form id="JellycastConfigForm">
                     <div class="verticalSection">
                         <p>
-                            Chromecast devices discovered on the local network appear automatically in
+                            Jellycast devices discovered on the local network appear automatically in
                             Jellyfin's own cast menu (the cast icon next to the user avatar, and on
                             each item's play screen). No further setup is required - these settings
                             only tune discovery behaviour.
@@ -20,7 +20,7 @@
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="DiscoveryIntervalSeconds">Discovery interval (seconds)</label>
                         <input id="DiscoveryIntervalSeconds" name="DiscoveryIntervalSeconds" type="number" is="emby-input" min="5" />
-                        <div class="fieldDescription">How often to scan the local network for Chromecast devices.</div>
+                        <div class="fieldDescription">How often to scan the local network for Jellycast devices.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="DeviceStaleAfterSeconds">Device timeout (seconds)</label>
@@ -30,19 +30,19 @@
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="DeviceNamePrefix">Device name prefix</label>
                         <input id="DeviceNamePrefix" name="DeviceNamePrefix" type="text" is="emby-input" />
-                        <div class="fieldDescription">Optional text shown before each Chromecast's name in the cast menu, e.g. "Chromecast - ".</div>
+                        <div class="fieldDescription">Optional text shown before each Jellycast's name in the cast menu, e.g. "Jellycast - ".</div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
                             <input id="PreferDirectPlay" name="PreferDirectPlay" type="checkbox" is="emby-checkbox" />
-                            <span>Prefer direct play when the source is already Chromecast-compatible</span>
+                            <span>Prefer direct play when the source is already Jellycast-compatible</span>
                         </label>
                         <div class="fieldDescription">When off, every item is transcoded to H.264/AAC MP4. When on, compatible MP4/H.264/AAC sources are streamed as-is.</div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
                             <input id="EnableDebugLogging" name="EnableDebugLogging" type="checkbox" is="emby-checkbox" />
-                            <span>Enable verbose Chromecast logging</span>
+                            <span>Enable verbose Jellycast logging</span>
                         </label>
                         <div class="fieldDescription">Logs CastV2 protocol traffic to the server log. Useful for troubleshooting, noisy otherwise.</div>
                     </div>
@@ -55,14 +55,14 @@
             </div>
         </div>
         <script type="text/javascript">
-            var ChromecastConfig = {
+            var JellycastConfig = {
                 pluginUniqueId: 'ec2dcff4-56f0-4a88-b0a8-f3910a7cd823'
             };
 
-            document.querySelector('#ChromecastConfigPage')
+            document.querySelector('#JellycastConfigPage')
                 .addEventListener('pageshow', function () {
                     Dashboard.showLoadingMsg();
-                    ApiClient.getPluginConfiguration(ChromecastConfig.pluginUniqueId).then(function (config) {
+                    ApiClient.getPluginConfiguration(JellycastConfig.pluginUniqueId).then(function (config) {
                         document.querySelector('#DiscoveryIntervalSeconds').value = config.DiscoveryIntervalSeconds;
                         document.querySelector('#DeviceStaleAfterSeconds').value = config.DeviceStaleAfterSeconds;
                         document.querySelector('#DeviceNamePrefix').value = config.DeviceNamePrefix;
@@ -72,16 +72,16 @@
                     });
                 });
 
-            document.querySelector('#ChromecastConfigForm')
+            document.querySelector('#JellycastConfigForm')
                 .addEventListener('submit', function (e) {
                     Dashboard.showLoadingMsg();
-                    ApiClient.getPluginConfiguration(ChromecastConfig.pluginUniqueId).then(function (config) {
+                    ApiClient.getPluginConfiguration(JellycastConfig.pluginUniqueId).then(function (config) {
                         config.DiscoveryIntervalSeconds = parseInt(document.querySelector('#DiscoveryIntervalSeconds').value, 10);
                         config.DeviceStaleAfterSeconds = parseInt(document.querySelector('#DeviceStaleAfterSeconds').value, 10);
                         config.DeviceNamePrefix = document.querySelector('#DeviceNamePrefix').value;
                         config.PreferDirectPlay = document.querySelector('#PreferDirectPlay').checked;
                         config.EnableDebugLogging = document.querySelector('#EnableDebugLogging').checked;
-                        ApiClient.updatePluginConfiguration(ChromecastConfig.pluginUniqueId, config).then(function (result) {
+                        ApiClient.updatePluginConfiguration(JellycastConfig.pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);
                         });
                     });

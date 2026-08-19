@@ -50,6 +50,27 @@ public sealed class ChromecastSessionController : ISessionController, IAsyncDisp
     private MediaSourceInfo? _currentMediaSource;
     private string? _currentPlaySessionId;
     private PlayMethod _currentPlayMethod;
+    private int? _currentSubtitleStreamIndex;
+
+    /// <summary>
+    /// How many ticks into the original item the currently-loaded stream's local time zero
+    /// corresponds to. Zero for a direct-played file (the Chromecast sees the whole file, so its
+    /// own CurrentTime already is the absolute position). Set to the seek target when a transcode
+    /// is reloaded starting mid-file, since the resulting stream's own timestamps restart at zero.
+    /// </summary>
+    private long _positionOffsetTicks;
+
+    /// <summary>
+    /// True while a LaunchApplication+Load sequence is in flight. The Default Media Receiver can
+    /// broadcast an unsolicited "idle, nothing loaded" status right after the app launches and
+    /// before our LOAD command takes effect; without this guard that status arrives while
+    /// _currentItem is already set (for a fast, legitimate reason - see LoadMediaAsync) and gets
+    /// misread as the just-started playback having immediately stopped. SharpCaster's LoadAsync
+    /// already returns the load's own resulting status directly, so nothing is lost by ignoring
+    /// the event-based status stream for this window.
+    /// </summary>
+    private volatile bool _loadInProgress;
+
     private bool _disposed;
     private volatile bool _stale;
 
@@ -166,6 +187,24 @@ public sealed class ChromecastSessionController : ISessionController, IAsyncDisp
             return;
         }
 
+        await LoadMediaAsync(item, mediaSource, startPositionTicks, subtitleStreamIndex, isNewItem: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Loads media onto the Chromecast, either as a fresh "play this item" (<paramref name="isNewItem"/>
+    /// = true) or as a reload of the currently-playing item at a new position - the latter is how
+    /// seeking/skipping is implemented for transcoded streams (see <see cref="SendPlaystateCommand"/>),
+    /// since a live single-pass transcode has no seekable byte range for the Chromecast to jump
+    /// within; the only way to "seek" it is to start a new transcode at the target offset.
+    /// </summary>
+    private async Task LoadMediaAsync(
+        BaseItem item,
+        MediaSourceInfo mediaSource,
+        long startPositionTicks,
+        int? subtitleStreamIndex,
+        bool isNewItem,
+        CancellationToken cancellationToken)
+    {
         var client = await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
         if (client is null)
         {
@@ -174,50 +213,81 @@ public sealed class ChromecastSessionController : ISessionController, IAsyncDisp
 
         var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
         var playSessionId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-        var built = StreamUrlBuilder.Build(item, mediaSource, _serverAddress, _session.DeviceId, playSessionId, subtitleStreamIndex, config.PreferDirectPlay);
+        var built = StreamUrlBuilder.Build(item, mediaSource, _serverAddress, _session.DeviceId, playSessionId, subtitleStreamIndex, config.PreferDirectPlay, startPositionTicks);
 
-        _logger.LogDebug("Casting {ItemName} to {DeviceName}: {Url}", item.Name, _receiver.Name, built.Url);
+        // For a transcode, startPositionTicks is baked into the URL and the resulting stream's own
+        // timestamps start at zero, so status updates need this offset added back to report an
+        // absolute position. A direct-played file is the whole file regardless of seek position, so
+        // the Chromecast's own CurrentTime is already absolute.
+        _positionOffsetTicks = built.PlayMethod == PlayMethod.Transcode ? startPositionTicks : 0;
 
-        await client.LaunchApplicationAsync(DefaultMediaReceiverAppId, true).ConfigureAwait(false);
+        var durationTicks = mediaSource.RunTimeTicks - (built.PlayMethod == PlayMethod.Transcode ? startPositionTicks : 0);
 
-        var media = new Media
+        _logger.LogInformation(
+            "Casting {ItemName} to {DeviceName}: {PlayMethod}, start={StartPositionTicks} url={Url}",
+            item.Name,
+            _receiver.Name,
+            built.PlayMethod,
+            startPositionTicks,
+            built.Url);
+
+        _loadInProgress = true;
+        try
         {
-            ContentId = built.Url,
-            ContentType = built.ContentType,
-            StreamType = StreamType.Buffered,
-            Duration = mediaSource.RunTimeTicks.HasValue ? mediaSource.RunTimeTicks.Value / 10_000_000d : null,
-            Metadata = new MediaMetadata
+            await client.LaunchApplicationAsync(DefaultMediaReceiverAppId, true).ConfigureAwait(false);
+
+            var media = new Media
             {
-                Title = item.Name,
-                SubTitle = item.GetParent()?.Name,
-                Images = built.ImageUrl is null ? null : new[] { new Image { Url = built.ImageUrl } }
-            },
-            Tracks = built.SubtitleTrack is null ? null : new[] { built.SubtitleTrack }
-        };
+                ContentId = built.Url,
+                ContentType = built.ContentType,
+                StreamType = StreamType.Buffered,
+                Duration = durationTicks.HasValue ? durationTicks.Value / 10_000_000d : null,
+                Metadata = new MediaMetadata
+                {
+                    Title = item.Name,
+                    SubTitle = item.GetParent()?.Name,
+                    Images = built.ImageUrl is null ? null : new[] { new Image { Url = built.ImageUrl } }
+                },
+                Tracks = built.SubtitleTrack is null ? null : new[] { built.SubtitleTrack }
+            };
 
-        _currentItem = item;
-        _currentMediaSource = mediaSource;
-        _currentPlaySessionId = playSessionId;
-        _currentPlayMethod = built.PlayMethod;
+            _currentItem = item;
+            _currentMediaSource = mediaSource;
+            _currentPlaySessionId = playSessionId;
+            _currentPlayMethod = built.PlayMethod;
+            _currentSubtitleStreamIndex = subtitleStreamIndex;
 
-        var activeTrackIds = built.SubtitleTrack is null ? null : new[] { built.SubtitleTrack.TrackId };
-        await client.MediaChannel.LoadAsync(media, true, activeTrackIds).ConfigureAwait(false);
+            var activeTrackIds = built.SubtitleTrack is null ? null : new[] { built.SubtitleTrack.TrackId };
 
-        if (startPositionTicks > 0)
+            // currentTime tells the receiver what position to start playback (and its own
+            // on-screen display) from. For a direct-played file this is a normal in-stream seek;
+            // for a transcode reload the underlying stream only contains content from
+            // startPositionTicks onward, so currentTime just needs to be relative to *that*
+            // stream's own start (i.e. 0), which is already the default.
+            var loadCurrentTime = built.PlayMethod == PlayMethod.DirectStream && startPositionTicks > 0
+                ? startPositionTicks / 10_000_000d
+                : (double?)null;
+
+            await client.MediaChannel.LoadAsync(media, true, activeTrackIds, loadCurrentTime).ConfigureAwait(false);
+        }
+        finally
         {
-            await client.MediaChannel.SeekAsync(startPositionTicks / 10_000_000d).ConfigureAwait(false);
+            _loadInProgress = false;
         }
 
-        await _sessionManager.OnPlaybackStart(new PlaybackStartInfo
+        if (isNewItem)
         {
-            ItemId = itemId,
-            SessionId = _session.Id,
-            MediaSourceId = mediaSource.Id,
-            PlaySessionId = playSessionId,
-            PositionTicks = startPositionTicks,
-            CanSeek = true,
-            PlayMethod = built.PlayMethod
-        }).ConfigureAwait(false);
+            await _sessionManager.OnPlaybackStart(new PlaybackStartInfo
+            {
+                ItemId = item.Id,
+                SessionId = _session.Id,
+                MediaSourceId = mediaSource.Id,
+                PlaySessionId = playSessionId,
+                PositionTicks = startPositionTicks,
+                CanSeek = true,
+                PlayMethod = built.PlayMethod
+            }).ConfigureAwait(false);
+        }
     }
 
     private async Task SendPlaystateCommand(PlaystateRequest? command, CancellationToken cancellationToken)
@@ -250,7 +320,7 @@ public sealed class ChromecastSessionController : ISessionController, IAsyncDisp
 
                 break;
             case PlaystateCommand.Seek:
-                await _client.MediaChannel.SeekAsync((command.SeekPositionTicks ?? 0) / 10_000_000d).ConfigureAwait(false);
+                await SeekAsync(command.SeekPositionTicks ?? 0, cancellationToken).ConfigureAwait(false);
                 break;
             case PlaystateCommand.NextTrack:
                 if (_queue.Count > 0)
@@ -262,6 +332,27 @@ public sealed class ChromecastSessionController : ISessionController, IAsyncDisp
             default:
                 _logger.LogDebug("Playstate command {Command} is not supported for Chromecast sessions", command.Command);
                 break;
+        }
+    }
+
+    private async Task SeekAsync(long positionTicks, CancellationToken cancellationToken)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+
+        if (_currentPlayMethod == PlayMethod.Transcode && _currentItem is not null && _currentMediaSource is not null)
+        {
+            // A live single-pass transcode has no seekable byte range for the Chromecast to jump
+            // within - the only way to actually change position is to start a new transcode at
+            // the target offset and load that instead. See LoadMediaAsync for the offset bookkeeping
+            // this requires for position reporting to stay correct afterwards.
+            await LoadMediaAsync(_currentItem, _currentMediaSource, positionTicks, _currentSubtitleStreamIndex, isNewItem: false, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await _client.MediaChannel.SeekAsync(positionTicks / 10_000_000d).ConfigureAwait(false);
         }
     }
 
@@ -283,18 +374,23 @@ public sealed class ChromecastSessionController : ISessionController, IAsyncDisp
 
         if (_currentItem is not null && _currentMediaSource is not null)
         {
+            var lastKnownPosition = _positionOffsetTicks + (long)((_client?.MediaChannel.MediaStatus?.CurrentTime ?? 0) * 10_000_000);
+
             await _sessionManager.OnPlaybackStopped(new PlaybackStopInfo
             {
                 ItemId = _currentItem.Id,
                 SessionId = _session.Id,
                 MediaSourceId = _currentMediaSource.Id,
-                PlaySessionId = _currentPlaySessionId
+                PlaySessionId = _currentPlaySessionId,
+                PositionTicks = lastKnownPosition
             }).ConfigureAwait(false);
         }
 
         _currentItem = null;
         _currentMediaSource = null;
         _currentPlaySessionId = null;
+        _currentSubtitleStreamIndex = null;
+        _positionOffsetTicks = 0;
     }
 
     private Task SendGeneralCommand(GeneralCommand? command, CancellationToken cancellationToken)
@@ -367,14 +463,14 @@ public sealed class ChromecastSessionController : ISessionController, IAsyncDisp
 
     private async void OnMediaStatusChanged(object? sender, MediaStatus status)
     {
-        if (_disposed || _currentItem is null || _currentMediaSource is null)
+        if (_disposed || _loadInProgress || _currentItem is null || _currentMediaSource is null)
         {
             return;
         }
 
         try
         {
-            var positionTicks = (long)(status.CurrentTime * 10_000_000);
+            var positionTicks = _positionOffsetTicks + (long)(status.CurrentTime * 10_000_000);
 
             if (status.PlayerState == PlayerStateType.Idle)
             {
@@ -392,6 +488,8 @@ public sealed class ChromecastSessionController : ISessionController, IAsyncDisp
                 _currentItem = null;
                 _currentMediaSource = null;
                 _currentPlaySessionId = null;
+                _currentSubtitleStreamIndex = null;
+                _positionOffsetTicks = 0;
 
                 await _sessionManager.OnPlaybackStopped(new PlaybackStopInfo
                 {
@@ -413,7 +511,8 @@ public sealed class ChromecastSessionController : ISessionController, IAsyncDisp
                     PositionTicks = positionTicks,
                     IsPaused = status.PlayerState == PlayerStateType.Paused,
                     IsMuted = status.Volume?.Muted ?? false,
-                    PlayMethod = _currentPlayMethod
+                    PlayMethod = _currentPlayMethod,
+                    CanSeek = true
                 }).ConfigureAwait(false);
             }
         }
